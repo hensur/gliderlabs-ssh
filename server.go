@@ -375,9 +375,8 @@ func (srv *Server) AddHostKey(key Signer) {
 				algorithm: gossh.SigAlgoRSASHA2256,
 			},
 		)
-	} else {
-		srv.HostSigners = append(srv.HostSigners, key)
 	}
+	srv.HostSigners = append(srv.HostSigners, key)
 }
 
 // wrapSigner wraps a signer and overrides its public key type with the provided algorithm
