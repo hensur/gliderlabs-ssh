@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -348,18 +349,67 @@ func (srv *Server) AddHostKey(key Signer) {
 	// these are later added via AddHostKey on ServerConfig, which performs the
 	// check for one of every algorithm.
 
-	// This check is based on the AddHostKey method from the x/crypto/ssh
-	// library. This allows us to only keep one active key for each type on a
-	// server at once. So, if you're dynamically updating keys at runtime, this
-	// list will not keep growing.
-	for i, k := range srv.HostSigners {
-		if k.PublicKey().Type() == key.PublicKey().Type() {
-			srv.HostSigners[i] = key
-			return
+	if key.PublicKey().Type() != gossh.SigAlgoRSA {
+		// This check is based on the AddHostKey method from the x/crypto/ssh
+		// library. This allows us to only keep one active key for each type on a
+		// server at once. So, if you're dynamically updating keys at runtime, this
+		// list will not keep growing.
+		for i, k := range srv.HostSigners {
+			if k.PublicKey().Type() == key.PublicKey().Type() {
+				srv.HostSigners[i] = key
+				return
+			}
 		}
 	}
 
-	srv.HostSigners = append(srv.HostSigners, key)
+	if key.PublicKey().Type() == gossh.SigAlgoRSA {
+		srv.HostSigners = append(srv.HostSigners,
+			&wrapSigner{
+				Signer:    key,
+				algorithm: gossh.SigAlgoRSASHA2512,
+			},
+		)
+		srv.HostSigners = append(srv.HostSigners,
+			&wrapSigner{
+				Signer:    key,
+				algorithm: gossh.SigAlgoRSASHA2256,
+			},
+		)
+	} else {
+		srv.HostSigners = append(srv.HostSigners, key)
+	}
+}
+
+// wrapSigner wraps a signer and overrides its public key type with the provided algorithm
+type wrapSigner struct {
+	gossh.Signer
+	algorithm string
+}
+
+// PublicKey returns an associated PublicKey instance.
+func (s *wrapSigner) PublicKey() gossh.PublicKey {
+	return &wrapPublicKey{
+		PublicKey: s.Signer.PublicKey(),
+		algorithm: s.algorithm,
+	}
+}
+
+// Sign returns raw signature for the given data. This method
+// will apply the hash specified for the keytype to the data using
+// the algorithm assigned for this key
+func (s *wrapSigner) Sign(rand io.Reader, data []byte) (*gossh.Signature, error) {
+	return s.Signer.(gossh.AlgorithmSigner).SignWithAlgorithm(rand, data, s.algorithm)
+}
+
+// wrapPublicKey wraps a PublicKey and overrides its type
+type wrapPublicKey struct {
+	gossh.PublicKey
+	algorithm string
+}
+
+// Type returns the algorithm
+func (k *wrapPublicKey) Type() string {
+	return k.algorithm
 }
 
 // SetOption runs a functional option against the server.
